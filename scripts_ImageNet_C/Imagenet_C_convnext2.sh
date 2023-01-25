@@ -1,4 +1,4 @@
-data=/ssd1/shiwei/data/Imagenet-robustness/Imagenet-c
+data=/workspace/ssd1/shiwei/data/Imagenet-robustness/Imagenet-c
 data_type=imagenet-c
 
 
