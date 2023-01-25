@@ -17,7 +17,8 @@ import json
 import os
 
 from pathlib import Path
-
+from timm1.models import create_model as create_model1
+from convnext import *
 from timm.data.mixup import Mixup
 from timm.models import create_model
 from timm.loss import LabelSmoothingCrossEntropy, SoftTargetCrossEntropy
@@ -27,9 +28,15 @@ from datasets import build_dataset
 from engine import train_one_epoch, evaluate
 from utils import NativeScalerWithGradNormCount as NativeScaler
 from sparse_core import Masking, CosineDecay
-
+#from timm.data import create_dataset, create_transform_v2, create_loader_v2
 import utils
 import models.SLaK
+from timm1.models import resnet50
+import cswin
+import torchvision
+#import torchvision
+#from models.convnext import  convnext_tiny
+
 
 def kernel_type(strings):
     strings = strings.replace("(", "").replace(")", "")
@@ -111,6 +118,7 @@ def get_args_parser():
     parser.add_argument('--train_interpolation', type=str, default='bicubic',
                         help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
 
+    parser.add_argument('--data_type', type=str, default='imagenet')
     # Evaluation parameters
     parser.add_argument('--crop_pct', type=float, default=None)
 
@@ -202,7 +210,6 @@ def get_args_parser():
                         help="The name of the W&B project where you're sending the new run.")
     parser.add_argument('--wandb_ckpt', type=str2bool, default=False,
                         help="Save model checkpoints as W&B Artifacts.")
-
     # large kernel
     parser.add_argument('--Decom', type=str2bool, default=False, help='Enabling kernel decomposition')
     parser.add_argument('--width_factor', type=float, default=1.0, help='set the width factor of the model')
@@ -219,8 +226,7 @@ def get_args_parser():
     parser.add_argument('-u', '--update-frequency', type=int, default=100, metavar='N', help='how many iterations to adapt weights')
     parser.add_argument('--only-L', action='store_true', help='only sparsify large kernels.')
     parser.add_argument('--bn', type=str2bool, default=True, help='add batch norm layer after each path')
-
-
+    parser.add_argument('--parallel', type=str2bool, default=True, help='parallel')
     return parser
 
 def main(args):
@@ -234,7 +240,7 @@ def main(args):
     np.random.seed(seed)
     cudnn.benchmark = True
 
-    dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
+    #dataset_train, args.nb_classes = build_dataset(is_train=True, args=args)
     if args.disable_eval:
         args.dist_eval = False
         dataset_val = None
@@ -244,19 +250,19 @@ def main(args):
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
 
-    sampler_train = torch.utils.data.DistributedSampler(
-        dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, seed=args.seed,
-    )
-    print("Sampler_train = %s" % str(sampler_train))
-    if args.dist_eval:
-        if len(dataset_val) % num_tasks != 0:
-            print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
-                    'This will slightly alter validation results as extra duplicate entries are added to achieve '
-                    'equal num of samples per-process.')
-        sampler_val = torch.utils.data.DistributedSampler(
-            dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
-    else:
-        sampler_val = torch.utils.data.SequentialSampler(dataset_val)
+    #sampler_train = torch.utils.data.DistributedSampler(
+    #    dataset_train, num_replicas=num_tasks, rank=global_rank, shuffle=True, seed=args.seed,
+    #)
+    #print("Sampler_train = %s" % str(sampler_train))
+    #if args.dist_eval:
+    #    if len(dataset_val) % num_tasks != 0:
+    #        print('Warning: Enabling distributed evaluation with an eval dataset not divisible by process number. '
+    #                'This will slightly alter validation results as extra duplicate entries are added to achieve '
+    #                'equal num of samples per-process.')
+    #    sampler_val = torch.utils.data.DistributedSampler(
+    #        dataset_val, num_replicas=num_tasks, rank=global_rank, shuffle=False)
+    #else:
+    sampler_val = torch.utils.data.SequentialSampler(dataset_val)
 
     if global_rank == 0 and args.log_dir is not None:
         os.makedirs(args.log_dir, exist_ok=True)
@@ -269,13 +275,13 @@ def main(args):
     else:
         wandb_logger = None
 
-    data_loader_train = torch.utils.data.DataLoader(
-        dataset_train, sampler=sampler_train,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        pin_memory=args.pin_mem,
-        drop_last=True,
-    )
+    #data_loader_train = torch.utils.data.DataLoader(
+    #    dataset_train, sampler=sampler_train,
+    #    batch_size=args.batch_size,
+    #    num_workers=args.num_workers,
+    #    pin_memory=args.pin_mem,
+    #    drop_last=True,
+    #)
 
     if dataset_val is not None:
         data_loader_val = torch.utils.data.DataLoader(
@@ -297,19 +303,42 @@ def main(args):
             mixup_alpha=args.mixup, cutmix_alpha=args.cutmix, cutmix_minmax=args.cutmix_minmax,
             prob=args.mixup_prob, switch_prob=args.mixup_switch_prob, mode=args.mixup_mode,
             label_smoothing=args.smoothing, num_classes=args.nb_classes)
-
-    model = create_model(
-        args.model,
-        pretrained=False,
-        num_classes=args.nb_classes,
-        drop_path_rate=args.drop_path,
-        layer_scale_init_value=args.layer_scale_init_value,
-        head_init_scale=args.head_init_scale,
-        kernel_size=args.kernel_size,
-        width_factor=args.width_factor,
-        Decom=args.Decom,
-        bn = args.bn
-        )
+    if args.model=='resnet50':
+        model=resnet50(args=None)
+    elif args.model=='pretrainedresnet50':
+        model= torchvision.models.resnet50(pretrained=True)
+    elif args.model=='convnext':
+        model=convnext_tiny(num_classes=args.nb_classes,drop_path_rate=args.drop_path,layer_scale_init_value=args.layer_scale_init_value,head_init_scale=args.head_init_scale)
+    elif args.model=='vit':
+        model=create_model1('vit_small_patch16_224',pretrained=True)
+    elif args.model=='vitdeit':
+        model=create_model1('vit_deit_small_patch16_224',pretrained=True)
+    elif args.model=='vitbase':
+        model=create_model1('vit_base_patch16_224',pretrained=True)
+    elif args.model=='swin':
+        model=create_model1('swin_tiny_patch4_window7_224',pretrained=True)
+    elif args.model=='cswin':
+        model=cswin.CSWin_64_12211_tiny_224()
+        ck=torch.load("./checkpoints/cswin_tiny_224.pth",map_location='cpu')['state_dict_ema']
+        model.load_state_dict(ck)
+    else:
+        model = create_model(
+            args.model,
+            pretrained=False,
+            num_classes=args.nb_classes,
+            drop_path_rate=args.drop_path,
+            layer_scale_init_value=args.layer_scale_init_value,
+            head_init_scale=args.head_init_scale,
+            kernel_size=args.kernel_size,
+            width_factor=args.width_factor,
+            Decom=args.Decom,
+            bn = args.bn,
+            flag=None
+            )
+    # model=convnext_tiny(num_classes=args.nb_classes,
+    #     drop_path_rate=args.drop_path,
+    #     layer_scale_init_value=args.layer_scale_init_value,
+    #     head_init_scale=args.head_init_scale)
 
     if args.finetune:
         if args.finetune.startswith('https'):
@@ -352,13 +381,13 @@ def main(args):
     print('number of params:', n_parameters)
 
     total_batch_size = args.batch_size * args.update_freq * utils.get_world_size()
-    num_training_steps_per_epoch = len(dataset_train) // total_batch_size
+    #num_training_steps_per_epoch = len(dataset_train) // total_batch_size
 
     print("LR = %.8f" % args.lr)
     print("Batch size = %d" % total_batch_size)
     print("Update frequent = %d" % args.update_freq)
-    print("Number of training examples = %d" % len(dataset_train))
-    print("Number of training steps per epoch = %d" % num_training_steps_per_epoch)
+    #print("Number of training examples = %d" % len(dataset_train))
+    #print("Number of training steps per epoch = %d" % num_training_steps_per_epoch)
 
     if args.layer_decay < 1.0 or args.layer_decay > 1.0:
         num_layers = 12 # SLak layers divided into 12 parts, each with a different decayed lr value.
@@ -383,16 +412,16 @@ def main(args):
     loss_scaler = NativeScaler() # if args.use_amp is False, this won't be used
 
     print("Use Cosine LR scheduler")
-    lr_schedule_values = utils.cosine_scheduler(
-        args.lr, args.min_lr, args.epochs, num_training_steps_per_epoch,
-        warmup_epochs=args.warmup_epochs, warmup_steps=args.warmup_steps,
-    )
+    #lr_schedule_values = utils.cosine_scheduler(
+    #    args.lr, args.min_lr, args.epochs, num_training_steps_per_epoch,
+    #    warmup_epochs=args.warmup_epochs, warmup_steps=args.warmup_steps,
+    #)
 
     if args.weight_decay_end is None:
         args.weight_decay_end = args.weight_decay
-    wd_schedule_values = utils.cosine_scheduler(
-        args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
-    print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
+    #wd_schedule_values = utils.cosine_scheduler(
+    #    args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
+    #print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
     if mixup_fn is not None:
         # smoothing is handled with mixup label transform
@@ -403,114 +432,115 @@ def main(args):
         criterion = torch.nn.CrossEntropyLoss()
 
     print("criterion = %s" % str(criterion))
-
-    utils.auto_load_model(
-        args=args, model=model, model_without_ddp=model_without_ddp,
-        optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
+    if args.model!='vit' and args.model!='swin' and args.model!='vitbase' and args.model!='vitdeit' and args.model!='cswin' and args.model!='pretrainedresnet50':
+        utils.auto_load_model(
+            args=args, model=model, model_without_ddp=model_without_ddp,
+            optimizer=optimizer, loss_scaler=loss_scaler, model_ema=model_ema)
 
     if args.eval:
 
         for name, weight in model.named_parameters():
             print(f"{name} density is {(weight != 0.0).sum().item()/weight.numel()}")
-        test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp)
+        test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp,data_type=args.data_type)
         print(f"Accuracy of the network on {len(dataset_val)} test images: {test_stats['acc1']:.5f}%")
 
         return
 
-    # num_training_steps_per_epoch is the number of the actual training steps
-    mask=None
-    if args.sparse:
-        decay = CosineDecay(args.prune_rate, int(num_training_steps_per_epoch*args.epochs), init_step= int(num_training_steps_per_epoch)*(args.start_epoch))
-        mask = Masking(optimizer, train_loader=data_loader_train, prune_mode=args.prune, prune_rate_decay=decay, growth_mode=args.growth, redistribution_mode=args.redistribution, args=args)
-        mask.add_module(model)
 
-    max_accuracy = 0.0
-    if args.model_ema and args.model_ema_eval:
-        max_accuracy_ema = 0.0
+    # # num_training_steps_per_epoch is the number of the actual training steps
+    # mask=None
+    # if args.sparse:
+    #     decay = CosineDecay(args.prune_rate, int(num_training_steps_per_epoch*args.epochs), init_step= int(num_training_steps_per_epoch)*(args.start_epoch))
+    #     mask = Masking(optimizer, train_loader=data_loader_train, prune_mode=args.prune, prune_rate_decay=decay, growth_mode=args.growth, redistribution_mode=args.redistribution, args=args)
+    #     mask.add_module(model)
 
-    para_count = 0
-    for name, para in model.named_parameters():
-        para_count += (para!=0).sum().item()
-    print(f"Total number of parameters are {para_count}")
+    # max_accuracy = 0.0
+    # if args.model_ema and args.model_ema_eval:
+    #     max_accuracy_ema = 0.0
 
-    print("Start training for %d epochs" % args.epochs)
-    start_time = time.time()
-    for epoch in range(args.start_epoch, args.epochs):
-        if args.distributed:
-            data_loader_train.sampler.set_epoch(epoch)
-        if log_writer is not None:
-            log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
-        if wandb_logger:
-            wandb_logger.set_steps()
-        train_stats = train_one_epoch(
-            model, criterion, data_loader_train, optimizer,
-            device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
-            log_writer=log_writer, wandb_logger=wandb_logger, start_steps=epoch * num_training_steps_per_epoch,
-            lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
-            num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
-            use_amp=args.use_amp, mask=mask
-        )
-        if args.output_dir and args.save_ckpt:
-            if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
-                utils.save_model(
-                    args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                    loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
-        if data_loader_val is not None:
-            test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp)
-            print(f"Accuracy of the model on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
-            if max_accuracy < test_stats["acc1"]:
-                max_accuracy = test_stats["acc1"]
-                if args.output_dir and args.save_ckpt:
-                    utils.save_model(
-                        args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                        loss_scaler=loss_scaler, epoch="best", model_ema=model_ema)
-            print(f'Max accuracy: {max_accuracy:.2f}%')
+    # para_count = 0
+    # for name, para in model.named_parameters():
+    #     para_count += (para!=0).sum().item()
+    # print(f"Total number of parameters are {para_count}")
 
-            if log_writer is not None:
-                log_writer.update(test_acc1=test_stats['acc1'], head="perf", step=epoch)
-                log_writer.update(test_acc5=test_stats['acc5'], head="perf", step=epoch)
-                log_writer.update(test_loss=test_stats['loss'], head="perf", step=epoch)
+    # print("Start training for %d epochs" % args.epochs)
+    # start_time = time.time()
+    # for epoch in range(args.start_epoch, args.epochs):
+    #     if args.distributed:
+    #         data_loader_train.sampler.set_epoch(epoch)
+    #     if log_writer is not None:
+    #         log_writer.set_step(epoch * num_training_steps_per_epoch * args.update_freq)
+    #     if wandb_logger:
+    #         wandb_logger.set_steps()
+    #     train_stats = train_one_epoch(
+    #         model, criterion, data_loader_train, optimizer,
+    #         device, epoch, loss_scaler, args.clip_grad, model_ema, mixup_fn,
+    #         log_writer=log_writer, wandb_logger=wandb_logger, start_steps=epoch * num_training_steps_per_epoch,
+    #         lr_schedule_values=lr_schedule_values, wd_schedule_values=wd_schedule_values,
+    #         num_training_steps_per_epoch=num_training_steps_per_epoch, update_freq=args.update_freq,
+    #         use_amp=args.use_amp, mask=mask
+    #     )
+    #     if args.output_dir and args.save_ckpt:
+    #         if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
+    #             utils.save_model(
+    #                 args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+    #                 loss_scaler=loss_scaler, epoch=epoch, model_ema=model_ema)
+    #     if data_loader_val is not None:
+    #         test_stats = evaluate(data_loader_val, model, device, use_amp=args.use_amp)
+    #         print(f"Accuracy of the model on the {len(dataset_val)} test images: {test_stats['acc1']:.1f}%")
+    #         if max_accuracy < test_stats["acc1"]:
+    #             max_accuracy = test_stats["acc1"]
+    #             if args.output_dir and args.save_ckpt:
+    #                 utils.save_model(
+    #                     args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+    #                     loss_scaler=loss_scaler, epoch="best", model_ema=model_ema)
+    #         print(f'Max accuracy: {max_accuracy:.2f}%')
 
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         **{f'test_{k}': v for k, v in test_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+    #         if log_writer is not None:
+    #             log_writer.update(test_acc1=test_stats['acc1'], head="perf", step=epoch)
+    #             log_writer.update(test_acc5=test_stats['acc5'], head="perf", step=epoch)
+    #             log_writer.update(test_loss=test_stats['loss'], head="perf", step=epoch)
 
-            # repeat testing routines for EMA, if ema eval is turned on
-            if args.model_ema and args.model_ema_eval:
-                test_stats_ema = evaluate(data_loader_val, model_ema.ema, device, use_amp=args.use_amp)
-                print(f"Accuracy of the model EMA on {len(dataset_val)} test images: {test_stats_ema['acc1']:.1f}%")
-                if max_accuracy_ema < test_stats_ema["acc1"]:
-                    max_accuracy_ema = test_stats_ema["acc1"]
-                    if args.output_dir and args.save_ckpt:
-                        utils.save_model(
-                            args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
-                            loss_scaler=loss_scaler, epoch="best-ema", model_ema=model_ema)
-                    print(f'Max EMA accuracy: {max_accuracy_ema:.2f}%')
-                if log_writer is not None:
-                    log_writer.update(test_acc1_ema=test_stats_ema['acc1'], head="perf", step=epoch)
-                log_stats.update({**{f'test_{k}_ema': v for k, v in test_stats_ema.items()}})
-        else:
-            log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch,
-                         'n_parameters': n_parameters}
+    #         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+    #                      **{f'test_{k}': v for k, v in test_stats.items()},
+    #                      'epoch': epoch,
+    #                      'n_parameters': n_parameters}
 
-        if args.output_dir and utils.is_main_process():
-            if log_writer is not None:
-                log_writer.flush()
-            with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
-                f.write(json.dumps(log_stats) + "\n")
+    #         # repeat testing routines for EMA, if ema eval is turned on
+    #         if args.model_ema and args.model_ema_eval:
+    #             test_stats_ema = evaluate(data_loader_val, model_ema.ema, device, use_amp=args.use_amp)
+    #             print(f"Accuracy of the model EMA on {len(dataset_val)} test images: {test_stats_ema['acc1']:.1f}%")
+    #             if max_accuracy_ema < test_stats_ema["acc1"]:
+    #                 max_accuracy_ema = test_stats_ema["acc1"]
+    #                 if args.output_dir and args.save_ckpt:
+    #                     utils.save_model(
+    #                         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer,
+    #                         loss_scaler=loss_scaler, epoch="best-ema", model_ema=model_ema)
+    #                 print(f'Max EMA accuracy: {max_accuracy_ema:.2f}%')
+    #             if log_writer is not None:
+    #                 log_writer.update(test_acc1_ema=test_stats_ema['acc1'], head="perf", step=epoch)
+    #             log_stats.update({**{f'test_{k}_ema': v for k, v in test_stats_ema.items()}})
+    #     else:
+    #         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
+    #                      'epoch': epoch,
+    #                      'n_parameters': n_parameters}
 
-        if wandb_logger:
-            wandb_logger.log_epoch_metrics(log_stats)
+    #     if args.output_dir and utils.is_main_process():
+    #         if log_writer is not None:
+    #             log_writer.flush()
+    #         with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
+    #             f.write(json.dumps(log_stats) + "\n")
 
-    if wandb_logger and args.wandb_ckpt and args.save_ckpt and args.output_dir:
-        wandb_logger.log_checkpoints()
+    #     if wandb_logger:
+    #         wandb_logger.log_epoch_metrics(log_stats)
+
+    # if wandb_logger and args.wandb_ckpt and args.save_ckpt and args.output_dir:
+    #     wandb_logger.log_checkpoints()
 
 
-    total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
-    print('Training time {}'.format(total_time_str))
+    # total_time = time.time() - start_time
+    # total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    # print('Training time {}'.format(total_time_str))
 
 if __name__ == '__main__':
 

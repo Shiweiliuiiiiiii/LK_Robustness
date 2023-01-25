@@ -41,14 +41,14 @@ def heatmap(data, camp='coolwarm', figsize=(10, 10), ax=None, save_path=None):
     #   =========================== Add a **nicer** colorbar on top of the figure. Works for matplotlib 3.3. For later versions, use matplotlib.colorbar
     #   =========================== or you may simply ignore these and set cbar=True in the heatmap function above.
     from mpl_toolkits.axes_grid1.axes_divider import make_axes_locatable
-    from mpl_toolkits.axes_grid1.colorbar import colorbar
+    #from matplotlib.colors import colorbar
     ax_divider = make_axes_locatable(ax)
     cax = ax_divider.append_axes('right', size="5%", pad=0.05)
-    colorbar(ax.get_children()[0], cax=cax, orientation='vertical')
+    plt.colorbar(ax.get_children()[0], cax=cax, orientation='vertical')
     cax.xaxis.set_ticks_position('top')
     #   ================================================================
     #   ================================================================
-    plt.savefig(save_path)
+    plt.savefig(save_path,bbox_inches='tight')
 
 
 def get_rectangle(data, thresh):

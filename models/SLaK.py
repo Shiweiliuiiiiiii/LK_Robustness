@@ -62,11 +62,12 @@ class ReparamLargeKernelConv(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_size,
                  stride, groups,
                  small_kernel,
-                 small_kernel_merged=False, Decom=False, bn=True):
+                 small_kernel_merged=False, Decom=False, bn=True,parallel=True):
         super(ReparamLargeKernelConv, self).__init__()
         self.kernel_size = kernel_size
         self.small_kernel = small_kernel
         self.Decom = Decom
+        self.parallel=parallel
         # We assume the conv does not change the feature map size, so padding = k//2. Otherwise, you may configure padding as you wish, and change the padding of small_conv accordingly.
         padding = kernel_size // 2
         if small_kernel_merged:
@@ -90,7 +91,10 @@ class ReparamLargeKernelConv(nn.Module):
         if hasattr(self, 'lkb_reparam'):
             out = self.lkb_reparam(inputs)
         elif self.Decom:
-            out = self.LoRA1(inputs) + self.LoRA2(inputs)
+            if self.parallel:
+                out = self.LoRA1(inputs) + self.LoRA2(inputs)
+            else:
+                out=self.LoRA1(self.LoRA2(inputs))
             if hasattr(self, 'small_conv'):
                 out += self.small_conv(inputs)
         else:
@@ -134,13 +138,13 @@ class Block(nn.Module):
         drop_path (float): Stochastic depth rate. Default: 0.0
         layer_scale_init_value (float): Init value for Layer Scale. Default: 1e-6.
     """
-    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6, kernel_size=(7,7), Decom=None, bn=True):
+    def __init__(self, dim, drop_path=0., layer_scale_init_value=1e-6, kernel_size=(7,7), Decom=None, bn=True,parallel=True):
         super().__init__()
 
         self.large_kernel = ReparamLargeKernelConv(in_channels=dim, out_channels=dim,
                                                    kernel_size=kernel_size[0],
                                                    stride=1, groups=dim, small_kernel=kernel_size[1],
-                                                   small_kernel_merged=False, Decom=Decom, bn=bn)
+                                                   small_kernel_merged=False, Decom=Decom, bn=bn,parallel=parallel)
 
         self.norm = LayerNorm(dim, eps=1e-6)
         self.pwconv1 = nn.Linear(dim, 4 * dim) # pointwise/1x1 convs, implemented with linear layers
@@ -180,8 +184,7 @@ class SLaK(nn.Module):
     """
     def __init__(self, in_chans=3, num_classes=1000, 
                  depths=[3, 3, 9, 3], dims=[96, 192, 384, 768], drop_path_rate=0., 
-                 layer_scale_init_value=1e-6, head_init_scale=1., kernel_size=[51, 49, 47, 13, 5], width_factor=1.0, Decom=None, bn=True
-                 ):
+                 layer_scale_init_value=1e-6, head_init_scale=1., kernel_size=[51, 49, 47, 13, 5], width_factor=1.0, Decom=None, bn=True,parallel=True):
         super().__init__()
         dims = [int(x*width_factor) for x in dims]
         self.kernel_size = kernel_size
@@ -204,7 +207,7 @@ class SLaK(nn.Module):
         for i in range(4):
             stage = nn.Sequential(
                 *[Block(dim=dims[i], drop_path=dp_rates[cur + j], 
-                layer_scale_init_value=layer_scale_init_value, kernel_size=(self.kernel_size[i], self.kernel_size[-1]), Decom=Decom, bn=bn) for j in range(depths[i])]
+                layer_scale_init_value=layer_scale_init_value, kernel_size=(self.kernel_size[i], self.kernel_size[-1]), Decom=Decom, bn=bn,parallel=parallel) for j in range(depths[i])]
             )
             self.stages.append(stage)
             cur += depths[i]
@@ -227,10 +230,12 @@ class SLaK(nn.Module):
         for i in range(4):
             x = self.downsample_layers[i](x)
             x = self.stages[i](x)
-        return self.norm(x.mean([-2, -1])) # global average pooling, (N, C, H, W) -> (N, C)
+        return x
+        #return self.norm(x.mean([-2, -1])) # global average pooling, (N, C, H, W) -> (N, C)
 
     def forward(self, x):
         x = self.forward_features(x)
+        x=self.norm(x.mean([-2, -1]))
         x = self.head(x)
         return x
 

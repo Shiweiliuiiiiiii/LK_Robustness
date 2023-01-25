@@ -8,6 +8,7 @@
 
 import os
 import math
+from tabnanny import check
 import time
 from collections import defaultdict, deque
 import datetime
@@ -490,7 +491,11 @@ def auto_load_model(args, model, model_without_ddp, optimizer, loss_scaler, mode
                 args.resume, map_location='cpu', check_hash=True)
         else:
             checkpoint = torch.load(args.resume, map_location='cpu')
-        model_without_ddp.load_state_dict(checkpoint['model'])
+        print(checkpoint.keys())
+        if 'state_dict' in checkpoint:
+            model_without_ddp.load_state_dict(checkpoint['state_dict'])
+        else:
+            model_without_ddp.load_state_dict(checkpoint['model'])
         print("Resume checkpoint %s" % args.resume)
         if 'optimizer' in checkpoint and 'epoch' in checkpoint:
             optimizer.load_state_dict(checkpoint['optimizer'])

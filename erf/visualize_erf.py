@@ -16,7 +16,10 @@ from PIL import Image
 from erf.resnet_for_erf import resnet101, resnet152
 from SLaK_for_erf import SLakForERF
 from torch import optim as optim
-
+from convnext import *
+from timm1.models import resnet50
+import cswin
+from timm1.models import create_model as create_model1
 def str2bool(v):
     """
     Converts string to bool type; enables command line
@@ -39,11 +42,12 @@ def parse_args():
     parser.add_argument('--save_path', default='temp.npy', type=str, help='path to save the ERF matrix (.npy file)')
     parser.add_argument('--num_images', default=50, type=int, help='num of images to use')
     parser.add_argument('--Decom', type=str2bool, default=False, help='Enabling kernel decomposition')
+    parser.add_argument('--bn', type=str2bool, default=True, help='Enabling kernel decomposition')
     args = parser.parse_args()
     return args
 
 
-def get_input_grad(model, samples):
+def get_input_grad(model, samples):        
     outputs = model(samples)
     out_size = outputs.size()
     central_point = torch.nn.functional.relu(outputs[:, :, out_size[2] // 2, out_size[3] // 2]).sum()
@@ -78,21 +82,36 @@ def main(args):
     elif args.model == 'resnet152':
         model = resnet152(pretrained=args.weights is None)
     elif args.model == 'SLaK':
-        model = SLakForERF(kernel_size=[51, 49, 47, 7, 5], width_factor=1.3, Decom=args.Decom)
+        model = SLakForERF(kernel_size=[51, 49, 47,13, 5], width_factor=1.3, Decom=True,bn=args.bn)
     elif args.model == 'ConvNeXt':
-        model = SLakForERF(kernel_size=[7, 7, 7, 7, 100])
-    else:
-        raise ValueError('Unsupported model. Please add it here.')
+        model = SLakForERF(kernel_size=[7, 7, 7, 7, 100],bn=args.bn)
+    elif args.model=='convnext':
+        model=convnext_tiny(num_classes=1000,drop_path_rate=0.1)
+    elif args.model=='resnet50':
+        model=resnet50()
+    if args.model=='vit':
+        model=create_model1('vit_small_patch16_224',pretrained=True)
+    elif args.model=='vitdeit':
+        model=create_model1('vit_deit_small_patch16_224',pretrained=True)
+    elif args.model=='vitbase':
+        model=create_model1('vit_base_patch16_224',pretrained=True)
+    elif args.model=='swin':
+        model=create_model1('swin_tiny_patch4_window7_224',pretrained=True)
+    elif args.model=='cswin':
+        model=cswin.CSWin_64_12211_tiny_224()
+        ck=torch.load("./checkpoints/cswin_tiny_224.pth",map_location='cpu')['state_dict_ema']
+        model.load_state_dict(ck)
 
     if args.weights is not None:
-        print('load weights')
-        weights = torch.load(args.weights, map_location='cpu')
-        if 'model' in weights:
-            weights = weights['model']
-        if 'state_dict' in weights:
-            weights = weights['state_dict']
-        model.load_state_dict(weights)
-        print('loaded')
+        if args.model!='swin' and args.model!='cswin':
+            print('load weights')
+            weights = torch.load(args.weights, map_location='cpu')
+            if 'model' in weights:
+                weights = weights['model']
+            if 'state_dict' in weights:
+                weights = weights['state_dict']
+            model.load_state_dict(weights)
+            print('loaded')
 
     model.cuda()
     model.eval()    #   fix BN and droppath
