@@ -36,7 +36,7 @@ import cswin
 from torchvision import datasets
 from torchvision import transforms as pth_transforms
 #from models.convnext import  convnext_tiny
-from timm.utils import imagenetc_distortions
+# from timm.utils import imagenetc_distortions
 import sys
 
 def kernel_type(strings):
