@@ -353,8 +353,8 @@ class CSWinTransformer(nn.Module):
                 else:
                     x = blk(x)
         x = self.norm(x)
-        return x
-        #return torch.mean(x, dim=1)
+
+        return torch.mean(x, dim=1)
 
     def forward(self, x):
         x = self.forward_features(x)
