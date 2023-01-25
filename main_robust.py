@@ -166,7 +166,7 @@ def get_args_parser():
     parser.add_argument('--imagenet_default_mean_and_std', type=str2bool, default=True)
     parser.add_argument('--data_set', default='IMNET', choices=['CIFAR', 'IMNET', 'image_folder'],
                         type=str, help='ImageNet dataset path')
-    parser.add_argument('--output_dir', default='',
+    parser.add_argument('--output_dir', default='/workspace/ssd1/shiwei/LK_distill/Table_1_CKS/',
                         help='path where to save, empty for no saving')
     parser.add_argument('--log_dir', default=None,
                         help='path where to tensorboard log')
