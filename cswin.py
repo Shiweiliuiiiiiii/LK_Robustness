@@ -358,7 +358,7 @@ class CSWinTransformer(nn.Module):
 
     def forward(self, x):
         x = self.forward_features(x)
-        #x = self.head(x)
+        x = self.head(x)
         return x
 
 
