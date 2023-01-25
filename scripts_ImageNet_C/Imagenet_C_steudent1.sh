@@ -1,4 +1,4 @@
-data=/ssd1/shiwei/data/Imagenet-robustness/Imagenet-c #改下路径
+data=/workspace/ssd1/shiwei/data/Imagenet-robustness/Imagenet-c #改下路径
 data_type=imagenet-c
 
 cd ..
