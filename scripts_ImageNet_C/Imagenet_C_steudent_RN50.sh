@@ -9,3 +9,4 @@ python main_robust.py --model resnet50 --eval True --kernel_size 7 7 7 7 100 --w
 
 
 source deactivate
+cat
